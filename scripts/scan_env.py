@@ -35,19 +35,36 @@ def load_json(path):
         return None
 
 
-def frontmatter(path, limit=4096):
+BLOCK_SCALARS = (">", "|", ">-", "|-", ">+", "|+")
+
+
+def frontmatter(path, limit=32768):
+    """Top-level `key: value` pairs of a SKILL.md header. Handles what real skills use: a BOM, quoted
+    values, and values continued on indented lines (`description: >` / `|` blocks or plain wrapping)."""
     try:
-        with open(path, encoding="utf-8", errors="replace") as f:
+        with open(path, encoding="utf-8-sig", errors="replace") as f:  # utf-8-sig drops a BOM
             head = f.read(limit)
     except OSError:
         return {}
     m = FRONTMATTER.match(head)
-    out = {}
-    if m:
-        for line in m.group(1).splitlines():
-            if ":" in line and not line.startswith((" ", "\t")):
-                k, v = line.split(":", 1)
-                out[k.strip()] = v.strip().strip("\"'")
+    if not m:
+        return {}
+    lines = m.group(1).splitlines()
+    out, i = {}, 0
+    while i < len(lines):
+        line = lines[i]
+        i += 1
+        if ":" not in line or line.startswith((" ", "\t")):
+            continue
+        key, value = (x.strip() for x in line.split(":", 1))
+        continued = []
+        while i < len(lines) and (lines[i].startswith((" ", "\t")) or not lines[i].strip()):
+            continued.append(lines[i].strip())
+            i += 1
+        continued = [c for c in continued if c]
+        if value in BLOCK_SCALARS:
+            value = ""
+        out[key] = " ".join([v for v in [value.strip("\"'")] + continued if v])
     return out
 
 
@@ -205,6 +222,10 @@ def scan_agents(home):
     if synced.is_dir():
         for p in synced.glob("*/*/agents/*.md"):
             out.append({"name": p.stem, "source": "plugin:" + plugin_name_from_dir(p.parents[1].name)})
+    cache = Path(home) / ".claude" / "plugins" / "cache"
+    if cache.is_dir():  # <marketplace>/<plugin>/<version>/agents/<name>.md
+        for p in cache.glob("*/*/*/agents/*.md"):
+            out.append({"name": p.stem, "source": "plugin:" + p.parents[2].name})
     return out
 
 
@@ -319,6 +340,20 @@ def summary(result):
     return "\n".join(lines)
 
 
+def write_private(path, result):
+    """The inventory holds the home path, skill descriptions and project folder names: create the folder
+    if needed and make the file readable by its owner only (no effect on Windows, where it is a no-op)."""
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        json.dump(result, f, ensure_ascii=False, indent=1)
+    try:
+        os.chmod(p, 0o600)  # also when the file already existed with wider permissions
+    except OSError:
+        pass
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--home", default=os.path.expanduser("~"))
@@ -330,8 +365,7 @@ def main(argv=None):
         sys.stdout.reconfigure(encoding="utf-8")
     result = scan(args.home, args.live, args.categories)
     if args.out:
-        with open(args.out, "w", encoding="utf-8") as f:
-            json.dump(result, f, ensure_ascii=False, indent=1)
+        write_private(args.out, result)
     print(summary(result))
     return 0
 

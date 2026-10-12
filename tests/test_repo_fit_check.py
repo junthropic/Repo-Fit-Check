@@ -316,5 +316,185 @@ class SentenceHandling(unittest.TestCase):
         self.assertEqual(D.MIN_REL, 0.34)
 
 
+class LicensePenalty(unittest.TestCase):
+    def score(self, lic, allowed):
+        return D.score_repo(repo("o/x", 10, "labor law", ["labor"], lic=lic), [["labor"], ["law"]], allowed, now=NOW)["score"]
+
+    def test_with_an_allowed_list_unknown_is_penalised_like_an_unlisted_license(self):
+        ok = self.score("MIT", ["MIT"])
+        for lic in (None, "NOASSERTION", "ISC"):
+            self.assertLess(self.score(lic, ["MIT"]), ok * 0.7, lic)
+
+    def test_without_a_list_unknown_keeps_its_small_discount_only(self):
+        self.assertGreater(self.score(None, []), self.score("MIT", []) * 0.95)
+
+    def test_permissive_keyword_and_plain_lists(self):
+        self.assertEqual(D.license_list("permissive"), D.PERMISSIVE)
+        self.assertEqual(D.license_list(" MIT , ISC ,"), ["MIT", "ISC"])
+        self.assertEqual(D.license_list(""), [])
+        self.assertIn("MIT-0", D.PERMISSIVE)
+
+
+class FailureHandling(unittest.TestCase):
+    def test_a_missing_gh_is_a_clear_error_not_a_traceback(self):
+        from unittest import mock
+        with mock.patch.object(D.subprocess, "run", side_effect=FileNotFoundError):
+            with self.assertRaisesRegex(RuntimeError, "gh CLI was not found"):
+                D.GH()._run(["api", "user"])
+
+    def test_non_json_output_is_a_clear_error(self):
+        from unittest import mock
+        done = mock.Mock(returncode=0, stdout="<html>", stderr="")
+        with mock.patch.object(D.subprocess, "run", return_value=done):
+            with self.assertRaisesRegex(RuntimeError, "not JSON"):
+                D.GH()._run(["api", "user"])
+
+    def test_a_rate_limit_is_waited_for_once_per_run_not_once_per_query(self):
+        from unittest import mock
+        limited = mock.Mock(returncode=1, stdout="", stderr="API rate limit exceeded")
+        gh = D.GH(pace=0)
+        with mock.patch.object(D.subprocess, "run", return_value=limited), mock.patch.object(D.time, "sleep") as sleep:
+            for _ in range(3):
+                with self.assertRaises(RuntimeError):
+                    gh._run(["api", "x"])
+        self.assertEqual(sleep.call_count, 1)
+
+    def test_searches_stop_after_three_failures_in_a_row_and_say_so(self):
+        class Down:
+            calls = 0
+
+            def search(self, q, per_page=30, sort=None):
+                Down.calls += 1
+                raise RuntimeError("HTTP 401: Bad credentials")
+        _, trace = D.search_with_relaxation(Down(), [["a"], ["b"], ["c"]], max_queries=16)
+        self.assertEqual(Down.calls, D.MAX_CONSECUTIVE_FAILURES)
+        self.assertEqual(trace[-1]["rung"], "stopped")
+        self.assertTrue(D.search_failed(trace))
+
+    def test_a_failed_search_blames_the_login_not_the_terms(self):
+        from types import SimpleNamespace
+        trace = [{"rung": "strict", "query": "q", "error": "HTTP 401: Bad credentials"}]
+        args = SimpleNamespace(license="", avoid="", min_rel=D.MIN_REL, top=10)
+        text, _ = D.report_block("t", [], [["a"]], args, trace)
+        self.assertIn("The search itself failed", text)
+        self.assertIn("Bad credentials", text)
+        self.assertNotIn("Loosen", text)
+
+    def test_an_unknown_source_is_an_error_not_a_silent_no_op(self):
+        import contextlib
+        import io
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.assertEqual(D.main(["--terms", "a,b", "--source", "star"]), 2)
+        self.assertIn("unknown --source star", err.getvalue())
+
+    def test_terms_win_over_purpose_and_the_user_is_told(self):
+        import contextlib
+        import io
+        from unittest import mock
+
+        class Quiet:
+            def starred(self, refresh=False):
+                return []
+
+            def search(self, *a, **k):
+                return []
+        err, out = io.StringIO(), io.StringIO()
+        with mock.patch.object(D, "GH", Quiet), contextlib.redirect_stderr(err), contextlib.redirect_stdout(out):
+            D.main(["--terms", "korea, law", "--purpose", "pdf", "--source", "stars"])
+        self.assertIn("--purpose is ignored", err.getvalue())
+        self.assertIn("'korea'", out.getvalue())
+
+
+class StarredCache(unittest.TestCase):
+    class Recorded(D.GH):
+        def __init__(self, cache_dir, login="me"):
+            super().__init__(pace=0, cache_dir=cache_dir)
+            self.login_name, self.fetches = login, 0
+
+        def _run(self, args, retries=1):
+            if args == ["api", "user"]:
+                return {"login": self.login_name}
+            self.fetches += 1
+            return [[{"full_name": "o/r", "description": "d", "stargazers_count": 1}]]
+
+    def test_second_call_uses_the_cache_for_the_same_account(self):
+        with tempfile.TemporaryDirectory() as d:
+            gh = self.Recorded(d)
+            self.assertEqual(len(gh.starred()), 1)
+            gh.starred()
+            self.assertEqual(gh.fetches, 1)
+
+    def test_another_account_never_sees_the_previous_list(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.Recorded(d, "alice").starred()
+            bob = self.Recorded(d, "bob")
+            bob.starred()
+            self.assertEqual(bob.fetches, 1)
+
+    def test_a_damaged_or_old_format_cache_is_fetched_again(self):
+        with tempfile.TemporaryDirectory() as d:
+            cache = Path(d) / "starred.json"
+            for content in ("{not json", json.dumps([{"full_name": "old/format"}]), json.dumps({"login": "me", "repos": "x"})):
+                cache.write_text(content, encoding="utf-8")
+                gh = self.Recorded(d)
+                self.assertEqual([r["full_name"] for r in gh.starred()], ["o/r"])
+                self.assertEqual(gh.fetches, 1, content)
+
+
+class EnvironmentScan(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.home = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def skill(self, text, name="s", raw=None):
+        d = self.home / ".claude" / "skills" / name
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "SKILL.md").write_bytes(raw if raw is not None else text.encode("utf-8"))
+        return d / "SKILL.md"
+
+    def test_folded_and_literal_block_values_are_read(self):
+        folded = self.skill("---\nname: a\ndescription: >\n  Deploys the app\n  to production.\n---\nbody\n", "a")
+        literal = self.skill("---\nname: b\ndescription: |-\n  First line\n  second line\n---\n", "b")
+        self.assertEqual(S.frontmatter(folded)["description"], "Deploys the app to production.")
+        self.assertEqual(S.frontmatter(literal)["description"], "First line second line")
+
+    def test_plain_values_wrapped_over_several_lines_are_joined(self):
+        p = self.skill("---\nname: c\ndescription: Reviews pull requests\n  and writes a summary\n---\n", "c")
+        self.assertEqual(S.frontmatter(p)["description"], "Reviews pull requests and writes a summary")
+
+    def test_a_byte_order_mark_does_not_hide_the_header(self):
+        p = self.skill("", "d", raw=b"\xef\xbb\xbf---\nname: d\ndescription: with a BOM\n---\n")
+        self.assertEqual(S.frontmatter(p), {"name": "d", "description": "with a BOM"})
+
+    def test_a_long_description_is_read_whole(self):
+        p = self.skill("---\nname: e\ndescription: " + "word " * 1200 + "\n---\n", "e")
+        self.assertEqual(len(S.frontmatter(p)["description"]), len(("word " * 1200).strip()))
+
+    def test_quoted_values_and_nested_keys_do_not_break_the_header(self):
+        p = self.skill("---\nname: 'f'\nmetadata:\n  type: user\ndescription: \"quoted\"\n---\n", "f")
+        h = S.frontmatter(p)
+        self.assertEqual((h["name"], h["description"]), ("f", "quoted"))
+
+    def test_agents_of_plugins_in_the_cache_are_counted(self):
+        d = self.home / ".claude" / "plugins" / "cache" / "mkt" / "toolkit" / "1.0" / "agents"
+        d.mkdir(parents=True)
+        (d / "reviewer.md").write_text("---\nname: reviewer\n---\n", encoding="utf-8")
+        self.assertIn({"name": "reviewer", "source": "plugin:toolkit"}, S.scan_agents(self.home))
+
+    def test_the_inventory_file_is_created_with_its_folder_and_private(self):
+        out = self.home / "new" / "folder" / "env.json"
+        S.write_private(out, {"a": 1})
+        self.assertEqual(json.loads(out.read_text(encoding="utf-8")), {"a": 1})
+        if os.name == "posix":
+            self.assertEqual(out.stat().st_mode & 0o777, 0o600)
+            out.chmod(0o644)  # an existing, wider file is tightened too
+            S.write_private(out, {"a": 2})
+            self.assertEqual(out.stat().st_mode & 0o777, 0o600)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -29,20 +29,23 @@ description: 내 목적·단계·제약에 맞는 GitHub repo를 찾고(후보 �
 
 ### 2) 실제 환경 스캔 (중복 추천 방지)
 ```bash
-python "$HOME/.claude/skills/repo-fit-check/scripts/scan_env.py" --out "$TEMP/env.json" [--live live.txt]
+python "$HOME/.claude/skills/repo-fit-check/scripts/scan_env.py" --out "$HOME/.cache/repo-fit-check/env.json" [--live live.txt]
 ```
 디스크에서 읽는 것: `~/.claude/skills`, 플러그인 폴더의 스킬·에이전트·`.mcp.json`(서버 **이름만**), `~/.claude.json`, `~/.codex`.
 디스크에 없는 것(claude.ai 커넥터의 현재 연결 상태, 이 세션의 deferred tool)은 지금 세션에서 보이는 이름을 `live.txt`에 한 줄씩 적어 `--live`로 넘긴다(스킬 폴더: `~/.claude/skills/repo-fit-check`)(`mcp:Supabase`, `skill:xxx`).
+결과 파일에는 홈 경로, 스킬 설명, 프로젝트 폴더 이름이 들어 있다. 그래서 폴더를 만들고 소유자만 읽도록(0600) 저장한다(Windows에서는 이 권한이 적용되지 않는다).
 결과의 `[weak]` 표시는 이름 일치가 3개 미만이라 "있다"고 단정하기 약하다는 뜻이다.
 
 ### 3) 후보 찾기
 ```bash
 python "$HOME/.claude/skills/repo-fit-check/scripts/discover.py" --terms "<검색어>" --stage <단계> \
     --license MIT,Apache-2.0,BSD-3-Clause --avoid AGPL [--language TypeScript] [--source stars,search] [--top 10]
-python "$HOME/.claude/skills/repo-fit-check/scripts/discover.py" --gaps "$TEMP/env.json"        # 환경 공백 기반 탐색
+python "$HOME/.claude/skills/repo-fit-check/scripts/discover.py" --gaps "$HOME/.cache/repo-fit-check/env.json"        # 환경 공백 기반 탐색
 ```
 - `stars`: 내 스타 목록(`gh api user/starred`, 24시간 캐시)을 **먼저** 같은 기준으로 채점한다.
 - `search`: GitHub 검색. 결과가 부족하면 엄격 → 한 단어 빼기 → 토픽 → 단어 쌍 → 동의어 순으로 자동 완화하고, 시도한 쿼리(trace)를 출력한다.
+- `--license permissive`는 MIT, Apache-2.0, BSD, ISC 등 허용형 13종을 한 번에 지정한다. 목록을 주면 목록에 없는 라이선스와 GitHub이 식별하지 못한(`NOASSERTION`) 라이선스 모두 점수를 깎는다.
+- `--source` 값은 `stars`, `search`만 받는다(오타는 오류). 검색이 연달아 3번 실패하면 멈추고, 검색어가 아니라 로그인·네트워크가 원인이라고 알린다.
 - 정렬은 **관련도 70%** + 활동도 15% + 스타(로그, 상한) 10% + 라이선스 5%. 스타순이 아니다. 드문 용어일수록 가중치가 높다.
 - 스타 500 미만이면서 관련도가 높은 repo는 "작은 repo" 표로 따로 보여 준다.
 

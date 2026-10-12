@@ -48,6 +48,11 @@ FIELD_WEIGHT = {"name": 1.0, "topics": 0.9, "description": 0.7}
 QUALIFIERS = "in:name,description,readme archived:false fork:false"
 MIN_REL = 0.34
 MAX_GROUPS = 6
+MAX_CONSECUTIVE_FAILURES = 3
+# `--license permissive`. The same set as PERMISSIVE in site/search.js of the star-search project.
+PERMISSIVE = ["MIT", "MIT-0", "Apache-2.0", "BSD-3-Clause", "BSD-2-Clause", "BSD-1-Clause", "ISC", "Unlicense",
+              "CC0-1.0", "0BSD", "BSL-1.0", "Zlib", "Unicode-3.0"]
+VALID_SOURCES = ("stars", "search")
 # One definition of "blank", used by both implementations. str.strip() and JS trim() disagree on
 # U+001C-001F, U+0085 and U+FEFF, which made the two rank differently.
 SPACE = re.compile(r"[\u0000-\u0020\u007f-\u00a0\u1680\u180e\u2000-\u200b\u2028\u2029\u202f\u205f\u3000\ufeff]+")
@@ -147,14 +152,24 @@ class GH:
         # per-user dir: the system temp dir can be a shared folder on some machines
         self.cache_dir = Path(cache_dir or Path.home() / ".cache" / "repo-fit-check")
         self.queries = 0
+        self._waited_for_rate_limit = False
 
     def _run(self, args, retries=1):
         for attempt in range(retries + 1):
-            p = subprocess.run(["gh"] + args, capture_output=True, text=True, encoding="utf-8")
+            try:
+                p = subprocess.run(["gh"] + args, capture_output=True, text=True, encoding="utf-8")
+            except FileNotFoundError:
+                raise RuntimeError("the gh CLI was not found. Install it from https://cli.github.com and run "
+                                   "`gh auth login`.") from None
             if p.returncode == 0:
-                return json.loads(p.stdout or "null")
+                try:
+                    return json.loads(p.stdout or "null")
+                except ValueError:
+                    raise RuntimeError("gh returned something that is not JSON: " + p.stdout[:100]) from None
             err = (p.stderr or "") + (p.stdout or "")
-            if attempt < retries and re.search(r"rate limit|secondary|403", err, re.I):
+            # wait for a rate limit once per run; waiting 30 seconds on every query would stall for minutes
+            if attempt < retries and not self._waited_for_rate_limit and re.search(r"rate limit|secondary|403", err, re.I):
+                self._waited_for_rate_limit = True
                 time.sleep(30)
                 continue
             raise RuntimeError(err.strip()[:300])
@@ -167,14 +182,25 @@ class GH:
             args += ["-f", f"sort={sort}", "-f", "order=desc"]
         return [normalize(r) for r in (self._run(args) or {}).get("items", [])]
 
+    def login(self):
+        return (self._run(["api", "user"]) or {}).get("login") or ""
+
     def starred(self, ttl_hours=24, refresh=False):
+        """The logged-in account's stars. The cache remembers whose they are, so switching accounts
+        never shows the previous account's list; a damaged or old-format cache is fetched again."""
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         cache = self.cache_dir / "starred.json"
+        login = self.login()
         if cache.exists() and not refresh and time.time() - cache.stat().st_mtime < ttl_hours * 3600:
-            return json.loads(cache.read_text(encoding="utf-8"))
+            try:
+                data = json.loads(cache.read_text(encoding="utf-8"))
+                if isinstance(data, dict) and data.get("login") == login and isinstance(data.get("repos"), list):
+                    return data["repos"]
+            except (OSError, ValueError):
+                pass
         pages = self._run(["api", "user/starred?per_page=100", "--paginate", "--slurp"]) or []
         repos = [normalize(r) for page in pages for r in page]
-        cache.write_text(json.dumps(repos, ensure_ascii=False), encoding="utf-8")
+        cache.write_text(json.dumps({"login": login, "repos": repos}, ensure_ascii=False), encoding="utf-8")
         return repos
 
 
@@ -335,7 +361,8 @@ def score_repo(repo, groups, allowed=(), avoid=(), now=None, weights=None):
     lic = license_status(repo["license"], allowed, avoid)
     lic_score = {"ok": 1.0, "unknown": 0.5, "mismatch": 0.0, "blocked": 0.0}[lic]
     final = 0.70 * rel + 0.10 * pop + 0.15 * activity(days) + 0.05 * lic_score
-    if lic == "mismatch":
+    # with a list of allowed licenses, "unknown" is no safer than a license that is not on the list
+    if lic == "mismatch" or (lic == "unknown" and allowed):
         final *= 0.6
     return {**repo, "rel": round(rel, 3), "pop": round(pop, 3), "days": days, "lic_status": lic,
             "score": round(final, 3), "why": why}
@@ -372,13 +399,18 @@ def select(scored, top=10, small_picks=5, small_stars=500, small_min_rel=0.5):
 # ---------------------------------------------------------------- search driver
 def search_with_relaxation(gh, groups, extra="", target=15, relevant=0.45, max_queries=16, allowed=(), avoid=()):
     """Run the ladder until `target` relevant (rel>=relevant) candidates exist. Returns (repos, trace)."""
-    pool, trace = {}, []
+    pool, trace, failures = {}, [], 0
     for rung, q in build_ladder(groups, extra, max_queries):
         try:
             found = gh.search(q)
         except RuntimeError as e:
             trace.append({"rung": rung, "query": q, "error": str(e)[:120]})
+            failures += 1
+            if failures >= MAX_CONSECUTIVE_FAILURES:  # a broken login or network will not fix itself on the next rung
+                trace.append({"rung": "stopped", "query": "", "error": f"{failures} searches in a row failed; stopped"})
+                break
             continue
+        failures = 0
         new = 0
         for r in found:
             if r["full_name"] not in pool:
@@ -403,16 +435,33 @@ def fmt_table(rows):
     return "\n".join(lines)
 
 
+def license_list(text):
+    """'MIT,Apache-2.0' -> ['MIT', 'Apache-2.0']; 'permissive' -> the standard permissive set."""
+    text = (text or "").strip()
+    if text.lower() == "permissive":
+        return list(PERMISSIVE)
+    return [x.strip() for x in text.split(",") if x.strip()]
+
+
+def search_failed(trace):
+    """True when every query failed: the cause is the login or the network, not the search terms."""
+    return bool(trace) and all(t.get("error") for t in trace)
+
+
 def report_block(title, repos, groups, args, trace=None):
-    allowed = [x for x in args.license.split(",") if x] if args.license else []
-    avoid = [x for x in args.avoid.split(",") if x] if args.avoid else []
+    allowed = license_list(args.license)
+    avoid = license_list(args.avoid)
     scored, excluded = rank(repos, groups, allowed, avoid, min_rel=args.min_rel)
     main, small = select(scored, args.top)
     out = [f"### {title}", f"pool {len(repos)} -> kept {len(scored)} (excluded {len(excluded)})"]
     left_out = unmatched_groups(repos, groups)
     if left_out:
         out.append("No repository matches " + ", ".join(g[0] for g in left_out) + "; left out of the scoring.")
-    if not main:
+    if search_failed(trace):
+        first = next(t["error"] for t in trace if t.get("error"))
+        out.append(f"The search itself failed, so there is nothing to judge: {first}\n"
+                   "Check `gh auth status` and the network. The search terms are not the cause.")
+    elif not main:
         out.append("No relevant candidate. Loosen --terms or add synonyms; the query trace below shows what was tried.")
     else:
         out.append(fmt_table(main))
@@ -436,7 +485,8 @@ def main(argv=None):
     ap.add_argument("--stage", default="", help="informational; echoed in the report")
     ap.add_argument("--source", default="stars,search", help="comma list of: stars, search")
     ap.add_argument("--gaps", help="env.json from scan_env.py --out; search categories that are gap/weak")
-    ap.add_argument("--license", default="", help="allowed SPDX ids, comma separated (soft: mismatches are penalised)")
+    ap.add_argument("--license", default="", help="allowed SPDX ids, comma separated, or 'permissive' "
+                    "(soft: licenses not on the list and unidentified ones are penalised)")
     ap.add_argument("--avoid", default="", help="license substrings to exclude, e.g. AGPL,GPL-3")
     ap.add_argument("--language", default="")
     ap.add_argument("--active-days", type=int, default=0, help="only search repos pushed within N days")
@@ -449,13 +499,21 @@ def main(argv=None):
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
 
+    sources = [s.strip() for s in args.source.split(",") if s.strip()]
+    unknown = [s for s in sources if s not in VALID_SOURCES]
+    if unknown or not sources:
+        print(f"ERROR: unknown --source {', '.join(unknown) or '(empty)'}; use stars, search or stars,search", file=sys.stderr)
+        return 2
+    if args.terms and args.purpose:
+        print("note: --terms is given, so --purpose is ignored", file=sys.stderr)
+
     gh = GH()
     extra = f"language:{args.language}" if args.language else ""
     if args.active_days:
         cutoff = datetime.fromordinal(datetime.now(timezone.utc).date().toordinal() - args.active_days).strftime("%Y-%m-%d")
         extra = (extra + f" pushed:>{cutoff}").strip()
-    allowed = [x for x in args.license.split(",") if x]
-    avoid = [x for x in args.avoid.split(",") if x]
+    allowed = license_list(args.license)
+    avoid = license_list(args.avoid)
     blocks, collected = [], {}
 
     if args.gaps:
@@ -485,14 +543,13 @@ def main(argv=None):
         if interpretation["dropped"]:
             print(f"only {MAX_GROUPS} term groups are used; left out: "
                   + ", ".join(g[0] for g in interpretation["dropped"]))
-        sources = [s.strip() for s in args.source.split(",")]
         if "stars" in sources:
             try:
                 starred = gh.starred(refresh=args.refresh_stars)
                 text, picks = report_block(f"From your starred repos ({len(starred)} scanned)", starred, groups, args)
                 blocks.append(text)
                 collected["stars"] = picks
-            except RuntimeError as e:
+            except (RuntimeError, OSError) as e:
                 blocks.append(f"### From your starred repos\nERROR: {e}")
         if "search" in sources:
             repos, trace = search_with_relaxation(gh, groups, extra, max_queries=args.max_queries, allowed=allowed, avoid=avoid)
