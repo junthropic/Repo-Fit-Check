@@ -65,7 +65,8 @@ def parse_terms(terms_arg=None, purpose=None, glossary=None):
         for ko, en in sorted(glossary.items(), key=lambda kv: -len(kv[0])):
             if ko in purpose and not any(ko in u or u in ko for u in used):
                 used.add(ko)
-                found.append((purpose.index(ko), [w.lower() for w in en.split("|")]))
+                if en:  # an empty value means "ignore this word" (방법 must not trigger 법)
+                    found.append((purpose.index(ko), [w.lower() for w in en.split("|")]))
         for m in re.finditer(r"[A-Za-z][A-Za-z0-9\-\.]+", purpose):
             w = m.group(0).lower()
             if w not in STOPWORDS and not any(w in g for _, g in found):

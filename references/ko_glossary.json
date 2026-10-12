@@ -1,5 +1,5 @@
 {
-  "_comment": "Korean substring -> English search synonyms ('a|b'). Used when --purpose has Korean text and --terms is not given. Extend freely; the agent should still pass explicit --terms when it can.",
+  "_comment": "Korean substring -> English search synonyms ('a|b'). Used when --purpose has Korean text and --terms is not given. A longer key wins over a shorter one it contains. An empty value means 'ignore this word': it is consumed but adds no search term (used so that 방법/사용법/문법 do not trigger the single-character key 법). Extend freely; the agent should still pass explicit --terms when it can.",
   "노무": "labor|employment|hr",
   "근로": "labor|employment|worker",
   "근로기준법": "labor-standards|labor-law|employment",
@@ -37,5 +37,18 @@
   "보안": "security",
   "개인정보": "privacy|pii|gdpr",
   "견적": "quote|estimate",
-  "ERP": "erp"
+  "ERP": "erp",
+  "법": "law|statute|legal",
+  "법인": "corporation|corporate",
+  "법원": "court",
+  "법무": "legal",
+  "불법": "illegal|unlawful",
+  "합법": "legal|lawful",
+  "위법": "violation|illegal",
+  "방법": "",
+  "사용법": "",
+  "문법": "",
+  "해법": "",
+  "용법": "",
+  "작성법": ""
 }

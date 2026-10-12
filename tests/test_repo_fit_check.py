@@ -165,6 +165,32 @@ class Problem4_EmptyKeywordMode(unittest.TestCase):
         self.assertTrue({"korea", "labor", "law", "compliance"} <= flat)
         self.assertNotIn("platform", flat)  # generic word dropped
 
+    def test_law_suffix_in_a_compound_word_gives_a_law_term(self):
+        g = D.parse_terms(purpose="한국 노동법 준수를 점검하는 도구 찾고 있어")
+        flat = {w for grp in g for w in grp}
+        self.assertTrue({"korea", "labor", "law", "compliance"} <= flat)
+
+    def test_words_that_only_contain_the_character_do_not_trigger_law(self):
+        for text, expected in [("문서 작성 방법", "document"), ("pdf 사용법", "pdf"), ("법인 회계", "accounting"),
+                               ("영어 문법 pdf", "pdf")]:
+            flat = {w for grp in D.parse_terms(purpose=text) for w in grp}
+            self.assertIn(expected, flat, text)
+            self.assertFalse({"law", "statute"} & flat, f"{text!r} should not mean law: {flat}")
+
+    def test_words_that_mean_something_else_map_to_their_own_terms(self):
+        flat = {w for grp in D.parse_terms(purpose="법인 회계") for w in grp}
+        self.assertIn("corporation", flat)
+        flat = {w for grp in D.parse_terms(purpose="불법 scraper") for w in grp}
+        self.assertIn("illegal", flat)
+
+    def test_an_ignored_word_alone_is_not_a_usable_query(self):
+        with self.assertRaises(ValueError):
+            D.parse_terms(purpose="방법")
+
+    def test_empty_glossary_value_means_ignore_not_crash(self):
+        g = D.parse_terms(purpose="방법 pdf", glossary={"방법": ""})
+        self.assertEqual(g, [["pdf"]])
+
     def test_untranslatable_input_fails_loudly(self):
         with self.assertRaises(ValueError):
             D.parse_terms(purpose="가나다라마바사")
