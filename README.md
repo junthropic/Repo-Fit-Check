@@ -30,7 +30,7 @@ python ~/.claude/skills/repo-fit-check/scripts/discover.py \
   --license MIT,Apache-2.0,BSD-3-Clause --avoid AGPL
 ```
 
-내 스타 목록을 먼저 같은 기준으로 채점한 뒤 GitHub 검색 결과를 붙입니다. `--license permissive`는 MIT, Apache-2.0, BSD, ISC 등 허용형 13종을 한 번에 지정합니다. 목록을 줄 때는 목록에 없는 라이선스와 GitHub이 식별하지 못한 라이선스 모두 점수를 깎습니다. 한국어 목적을 `--purpose "한국 노동법 점검"`처럼 줄 수도 있습니다. 이때는 `references/ko_glossary.json`에 있는 한국어를 영어로 바꿉니다. 영어 문장에서는 `am`, `can`, `help` 같은 군더더기를 걷어냅니다. 용어집이 모르는 한국어는 결과 맨 앞에 "알아듣지 못해 뺐다"고 적습니다. 알아들은 단어가 하나도 없을 때만 오류로 멈춥니다. 검색어가 6개를 넘으면 뺀 것도 알려 줍니다.
+내 스타 목록을 먼저 같은 기준으로 채점한 뒤 GitHub 검색 결과를 붙입니다. `--license permissive`는 MIT, Apache-2.0, BSD, ISC 등 허용형 13종을 한 번에 지정합니다. 목록을 줄 때는 목록에 없는 라이선스와 GitHub이 식별하지 못한 라이선스 모두 점수를 깎습니다. 한국어 목적을 `--purpose "한국 노동법 점검"`처럼 줄 수도 있습니다. 이때는 `references/ko_glossary.json`에 있는 한국어를 영어로 바꿉니다. 영어 문장에서는 `am`, `can`, `the` 같은 군더더기를 걷어내고, 걷어낸 말 중 검색어였을 수 있는 것(`help`, `looking` 등)은 결과 맨 앞에 알려 줍니다. 용어집이 모르는 한국어는 결과 맨 앞에 "알아듣지 못해 뺐다"고 적습니다. 알아들은 단어가 하나도 없을 때만 오류로 멈춥니다. 검색어가 6개를 넘으면 뺀 것도 알려 줍니다.
 
 2026년 10월 12일에 위 검색어로 돌린 결과의 일부입니다.
 
@@ -63,7 +63,7 @@ python ~/.claude/skills/repo-fit-check/scripts/discover.py \
 
 ## 테스트
 
-네트워크 없이 돌아가는 테스트 60개가 있습니다.
+네트워크 없이 돌아가는 테스트 74개가 있습니다.
 
 ```bash
 python -I -m unittest discover -s tests
