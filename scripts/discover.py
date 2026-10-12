@@ -11,7 +11,7 @@ Sources
   --gaps ENV.json   search for categories that scan_env.py reported as gap/weak
 
 Examples
-  python discover.py --purpose "한국 노무 진단 플랫폼" --stage 구현
+  python discover.py --purpose "한국 노동 법령 준수 점검" --stage 구현
   python discover.py --terms "labor|employment, law|statute, compliance" --license MIT,Apache-2.0 --avoid AGPL
   python discover.py --gaps env.json
 """

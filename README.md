@@ -30,7 +30,7 @@ python ~/.claude/skills/repo-fit-check/scripts/discover.py \
   --license MIT,Apache-2.0,BSD-3-Clause --avoid AGPL
 ```
 
-내 스타 목록을 먼저 같은 기준으로 채점한 뒤 GitHub 검색 결과를 붙입니다. 한국어 목적을 `--purpose "한국 노무 진단"`처럼 줄 수도 있습니다. 이때는 `references/ko_glossary.json`에 있는 단어만 영어로 바꿉니다. 바꾸지 못하는 단어가 있으면 빈 결과를 내는 대신 오류로 멈춥니다.
+내 스타 목록을 먼저 같은 기준으로 채점한 뒤 GitHub 검색 결과를 붙입니다. 한국어 목적을 `--purpose "한국 노동법 점검"`처럼 줄 수도 있습니다. 이때는 `references/ko_glossary.json`에 있는 단어만 영어로 바꿉니다. 바꾸지 못하는 단어가 있으면 빈 결과를 내는 대신 오류로 멈춥니다.
 
 2026년 10월 12일에 위 검색어로 돌린 결과의 일부입니다.
 

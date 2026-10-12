@@ -16,7 +16,7 @@ description: 내 목적·단계·제약에 맞는 GitHub repo를 찾고(후보 �
 
 | 항목 | 예 | 기본값 |
 |---|---|---|
-| 목적 | 한국 노무 진단 플랫폼의 법령 준수 검토 | (필수) |
+| 목적 | 한국 노동법 준수 점검 도구 | (필수) |
 | 단계 | 기획 / 설계 / 구현 / 검증 / 배포 | 구현 |
 | 제약 | 라이선스 MIT·Apache-2.0, 피할 것 AGPL, 언어 TypeScript | 허용형 라이선스, AGPL 제외 |
 
@@ -25,7 +25,7 @@ description: 내 목적·단계·제약에 맞는 GitHub repo를 찾고(후보 �
 목적에서 **핵심 개념 3~4개**를 뽑아 영어 동의어 묶음으로 만든다. 형식: `"a|b, c|d|e, f"` (쉼표=필수 그룹, `|`=동의어).
 - 한국어 목적은 직접 번역한다. 번역하기 어려우면 `--purpose "<한국어>"`로 넘기면 `references/ko_glossary.json`이 변환하되, 못 바꾸는 단어가 있으면 오류로 멈춘다(빈 결과로 넘어가지 않는다).
 - 모호한 단어(`fit`, `tool`, `platform`)는 넣지 않는다. 구체적인 도메인 단어를 넣는다.
-- 예: 노무 진단 → `"korea|korean, labor|employment, law|statute|compliance"`
+- 예: 노동법 점검 → `"korea|korean, labor|employment, law|statute|compliance"`
 
 ### 2) 실제 환경 스캔 (중복 추천 방지)
 ```bash

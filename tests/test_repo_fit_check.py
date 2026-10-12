@@ -151,7 +151,7 @@ class Problem3_StarSkew(unittest.TestCase):
 
 class Problem4_EmptyKeywordMode(unittest.TestCase):
     def test_korean_purpose_becomes_english_groups(self):
-        g = D.parse_terms(purpose="한국 노무 진단 플랫폼 법령 준수")
+        g = D.parse_terms(purpose="한국 노동 법령 준수 점검 플랫폼")
         flat = {w for grp in g for w in grp}
         self.assertTrue({"korea", "labor", "law", "compliance"} <= flat)
         self.assertNotIn("platform", flat)  # generic word dropped
@@ -160,7 +160,7 @@ class Problem4_EmptyKeywordMode(unittest.TestCase):
         with self.assertRaises(ValueError):
             D.parse_terms(purpose="가나다라마바사")
         with self.assertRaises(ValueError):
-            D.parse_terms(terms_arg="노무, law")
+            D.parse_terms(terms_arg="노동, law")
 
     def test_synonym_syntax(self):
         self.assertEqual(D.parse_terms(terms_arg="labor|employment, law"), [["labor", "employment"], ["law"]])
