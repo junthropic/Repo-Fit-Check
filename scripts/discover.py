@@ -22,7 +22,6 @@ import os
 import re
 import subprocess
 import sys
-import tempfile
 import time
 from datetime import datetime, timezone
 from itertools import combinations
@@ -88,7 +87,8 @@ class GH:
 
     def __init__(self, pace=1.2, cache_dir=None):
         self.pace = pace
-        self.cache_dir = Path(cache_dir or Path(tempfile.gettempdir()) / "repo-fit-check-cache")
+        # per-user dir: the system temp dir can be a shared folder on some machines
+        self.cache_dir = Path(cache_dir or Path.home() / ".cache" / "repo-fit-check")
         self.queries = 0
 
     def _run(self, args, retries=1):

@@ -33,6 +33,15 @@ class FakeGH:
         return []
 
 
+class StarCache(unittest.TestCase):
+    def test_default_cache_is_under_the_user_home(self):
+        self.assertTrue(D.GH().cache_dir.is_relative_to(Path.home()))
+
+    def test_cache_dir_can_be_overridden(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.assertEqual(D.GH(cache_dir=d).cache_dir, Path(d))
+
+
 class Problem1_NoGitHubMcp(unittest.TestCase):
     def test_backend_is_gh_cli_only(self):
         src = (Path(D.__file__)).read_text(encoding="utf-8")
