@@ -34,14 +34,27 @@ STOPWORDS = {
     "a", "an", "the", "and", "or", "for", "of", "to", "in", "on", "with", "my", "our", "tool", "tools",
     "that", "this", "using", "use", "app", "project",
     "i", "am", "is", "are", "was", "were", "be", "been", "being", "can", "could", "would", "should", "will",
-    "shall", "may", "might", "must", "do", "does", "did", "you", "your", "yours", "me", "we", "us", "it", "its",
+    "shall", "may", "might", "must", "do", "does", "did", "you", "your", "yours", "me", "we", "its",
     "they", "them", "their", "he", "she", "his", "her", "find", "finding", "looking", "look", "help", "helps",
     "want", "wants", "need", "needs", "good", "best", "better", "some", "any", "something", "anything",
-    "please", "like", "how", "what", "which", "who", "whom", "where", "when", "why", "get", "gets", "make",
-    "makes", "have", "has", "had", "into", "from", "by", "at", "as", "about", "than", "then", "so", "if", "not",
-    "no", "but", "all", "more", "most", "very", "also", "just", "there", "here", "used", "one", "own", "up",
-    "out", "over", "too", "such", "these", "those", "other", "another",
+    "please", "like", "how", "what", "which", "who", "whom", "where", "when", "why", "get", "gets",
+    "have", "has", "had", "into", "from", "by", "at", "as", "about", "than", "then", "so", "if", "not",
+    "no", "but", "all", "more", "most", "very", "also", "there", "here", "used", "one", "own", "up",
+    "out", "too", "such", "these", "those", "other", "another",
 }
+# Words of STOPWORDS that are pure grammar. Any other removed word of 4+ letters is reported to the user
+# ("looking", "help"), so that a word which was a real term in this search never vanishes silently.
+GRAMMAR = {
+    "a", "an", "the", "and", "or", "for", "of", "to", "in", "on", "with", "my", "our", "that", "this", "i", "am",
+    "is", "are", "was", "were", "be", "been", "being", "can", "could", "would", "should", "will", "shall", "may",
+    "might", "must", "do", "does", "did", "you", "your", "yours", "me", "we", "its", "they", "them", "their", "he",
+    "she", "his", "her", "how", "what", "which", "who", "whom", "where", "when", "why", "have", "has", "had", "into",
+    "from", "by", "at", "as", "about", "than", "then", "so", "if", "not", "no", "but", "all", "also", "there", "here",
+    "such", "these", "those",
+}
+# Words that carry little but are better than nothing: used only when nothing else is left
+# ("project management" must not end in an error).
+WEAK = {"tool", "tools", "app", "project", "use", "using"}
 GENERIC = {"platform", "system", "service", "program", "software", "solution", "application", "management"}
 SINGLE_LETTER_OK = {"c", "r"}  # language names; any other one-letter word is noise
 FIELD_WEIGHT = {"name": 1.0, "topics": 0.9, "description": 0.7}
@@ -71,6 +84,11 @@ def load_glossary():
         return {}
 
 
+def round3(x):
+    """Half-up rounding to 3 decimals, written so that JavaScript computes the very same value."""
+    return math.floor(x * 1000 + 0.5) / 1000
+
+
 def has_non_ascii(text):
     return any(ord(c) > 127 for c in text)
 
@@ -91,43 +109,87 @@ def dedupe_groups(groups):
     return out
 
 
+def ascii_boundary_ok(text, i, j, key):
+    """An ASCII glossary key ('ERP') must not be a piece of a longer English word ('ERPNext')."""
+    if not key.isascii():
+        return True
+    before = text[i - 1] if i > 0 else " "
+    after = text[j] if j < len(text) else " "
+    return not (before.isascii() and before.isalnum()) and not (after.isascii() and after.isalnum())
+
+
 def interpret(terms_arg=None, purpose=None, glossary=None):
     """Turn the user's words into term groups and say what was left out.
 
     Returns {"groups": [['labor','employment'], ['law','statute'], ['compliance']],
              "dropped": groups cut because only MAX_GROUPS are used,
-             "ignored": Korean words that neither the glossary nor the English rules understood}.
+             "ignored": Korean words that neither the glossary nor the English rules understood,
+             "omitted": English filler removed that might have been a real term ('looking', 'help')}.
     Within a group words are synonyms (any one matches); groups are all required for full relevance.
     Raises ValueError when there is nothing usable (fail loudly, not empty)."""
     glossary = load_glossary() if glossary is None else glossary
     terms_arg, purpose = normalize_space(terms_arg), normalize_space(purpose)
-    groups, ignored = [], []
+    groups, ignored, omitted = [], [], []
     if terms_arg:
         for part in terms_arg.split(","):
             words = [w.strip(" ").lower() for w in part.split("|") if w.strip(" ")]
             if words:
                 groups.append(words)
     elif purpose:
-        used, found = [], []
+        # Longest glossary words first; each one claims the characters it explains, wherever it occurs. A
+        # shorter word cannot claim them again (the word for "method" keeps the one-character word for "law"
+        # out) but may still match elsewhere, so a sentence can contain both.
+        taken = [False] * len(purpose)
+        found, weak = [], []
         for ko, en in sorted(glossary.items(), key=lambda kv: -len(kv[0])):
-            if ko in purpose and not any(ko in u or u in ko for u in used):
-                used.append(ko)
-                if en:  # an empty value means "ignore this word" (방법 must not trigger 법)
-                    found.append((purpose.index(ko), [w.lower() for w in en.split("|")]))
+            first, start = None, 0
+            while True:
+                i = purpose.find(ko, start)
+                if i < 0:
+                    break
+                j = i + len(ko)
+                if not any(taken[i:j]) and ascii_boundary_ok(purpose, i, j, ko):
+                    for k in range(i, j):
+                        taken[k] = True
+                    if first is None:
+                        first = i
+                start = i + 1
+            if first is not None and en:  # an empty value means "ignore this word"
+                found.append((first, [w.lower() for w in en.split("|")]))
         for m in TERM.finditer(purpose):
             w = m.group(0).lower()
             if w in STOPWORDS or w.isdigit() or (len(w) < 2 and w not in SINGLE_LETTER_OK):
+                if w in WEAK:
+                    weak.append((m.start(), [w]))
+                elif w in STOPWORDS and w not in GRAMMAR and len(w) >= 4 and w not in omitted:
+                    omitted.append(w)
                 continue
             if not any(w in g for _, g in found):
                 found.append((m.start(), [w]))
         # purpose order = user's emphasis; generic words ('platform') only dilute relevance
-        groups = [g for _, g in sorted(found, key=lambda x: x[0]) if not set(g) <= GENERIC]
-        rest = purpose
-        for ko in used:
-            rest = rest.replace(ko, " ")
-        for w in re.findall(r"[^\W\d_]+", TERM.sub(" ", rest)):
-            if len(w) >= 2 and w not in ignored:
-                ignored.append(w)
+        kept = []
+        for pos, g in sorted(found, key=lambda x: x[0]):
+            if set(g) <= GENERIC:
+                weak.append((pos, g))
+            else:
+                kept.append(g)
+        groups = kept
+        if not groups and weak:
+            groups = [g for _, g in sorted(weak, key=lambda x: x[0])]
+        else:
+            for _, g in sorted(weak, key=lambda x: x[0]):
+                for w in g:
+                    if len(w) >= 4 and w not in omitted:
+                        omitted.append(w)
+        rest = TERM.sub(" ", "".join(" " if t else c for c, t in zip(purpose, taken)))
+        run = ""
+        for ch in rest + " ":
+            if ch.isalpha():
+                run += ch
+            else:
+                if len(run) >= 2 and run not in ignored:
+                    ignored.append(run)
+                run = ""
     groups = dedupe_groups(groups)
     bad = [w for g in groups for w in g if has_non_ascii(w)]
     if bad:
@@ -136,7 +198,7 @@ def interpret(terms_arg=None, purpose=None, glossary=None):
         hint = f" Not understood: {', '.join(ignored)}." if ignored else ""
         raise ValueError("no usable search terms." + hint + " Pass --terms 'labor|employment, law, compliance' "
                          "(English; use | for synonyms) or an --purpose the glossary understands.")
-    return {"groups": groups[:MAX_GROUPS], "dropped": groups[MAX_GROUPS:], "ignored": ignored}
+    return {"groups": groups[:MAX_GROUPS], "dropped": groups[MAX_GROUPS:], "ignored": ignored, "omitted": omitted}
 
 
 def parse_terms(terms_arg=None, purpose=None, glossary=None):
@@ -190,17 +252,20 @@ class GH:
         never shows the previous account's list; a damaged or old-format cache is fetched again."""
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         cache = self.cache_dir / "starred.json"
-        login = self.login()
+        try:
+            login = self.login()
+        except RuntimeError:
+            login = None  # offline or not logged in: a fresh cache of unknown owner is still better than nothing
         if cache.exists() and not refresh and time.time() - cache.stat().st_mtime < ttl_hours * 3600:
             try:
                 data = json.loads(cache.read_text(encoding="utf-8"))
-                if isinstance(data, dict) and data.get("login") == login and isinstance(data.get("repos"), list):
+                if isinstance(data, dict) and (login is None or data.get("login") == login) and isinstance(data.get("repos"), list):
                     return data["repos"]
             except (OSError, ValueError):
                 pass
         pages = self._run(["api", "user/starred?per_page=100", "--paginate", "--slurp"]) or []
-        repos = [normalize(r) for page in pages for r in page]
-        cache.write_text(json.dumps({"login": login, "repos": repos}, ensure_ascii=False), encoding="utf-8")
+        repos = [normalize(r) for page in pages if isinstance(page, list) for r in page if isinstance(r, dict)]
+        cache.write_text(json.dumps({"login": login or "", "repos": repos}, ensure_ascii=False), encoding="utf-8")
         return repos
 
 
@@ -264,7 +329,7 @@ def word_in(word, toks):
         return False
     def has(p):
         # singular <- plural only for longer words: 'as'->'a', 'its'->'it', 'news'->'new' are not plurals
-        return p in toks or p + "s" in toks or (len(p) >= 5 and p.endswith("s") and p[:-1] in toks)
+        return p in toks or (len(p) >= 3 and p + "s" in toks) or (len(p) >= 5 and p.endswith("s") and p[:-1] in toks)
     return all(has(p) for p in parts)
 
 
@@ -364,8 +429,8 @@ def score_repo(repo, groups, allowed=(), avoid=(), now=None, weights=None):
     # with a list of allowed licenses, "unknown" is no safer than a license that is not on the list
     if lic == "mismatch" or (lic == "unknown" and allowed):
         final *= 0.6
-    return {**repo, "rel": round(rel, 3), "pop": round(pop, 3), "days": days, "lic_status": lic,
-            "score": round(final, 3), "why": why}
+    return {**repo, "rel": round3(rel), "pop": round3(pop), "days": days, "lic_status": lic,
+            "score": round3(final), "why": why}
 
 
 def rank(repos, groups, allowed=(), avoid=(), min_rel=0.0, now=None):
@@ -515,6 +580,7 @@ def main(argv=None):
     allowed = license_list(args.license)
     avoid = license_list(args.avoid)
     blocks, collected = [], {}
+    failed = False  # a source that returned nothing because it failed, not because nothing matched
 
     if args.gaps:
         env = json.load(open(args.gaps, encoding="utf-8"))
@@ -527,6 +593,7 @@ def main(argv=None):
                 continue
             repos, trace = search_with_relaxation(gh, groups, extra, target=8, max_queries=6, allowed=allowed, avoid=avoid)
             text, picks = report_block(f"Gap: {cat['label']}", repos, groups, args, trace)
+            failed = failed or search_failed(trace)
             blocks.append(text)
             collected[cat["id"]] = picks
     else:
@@ -540,6 +607,9 @@ def main(argv=None):
         if interpretation["ignored"]:
             print("not understood, left out: " + ", ".join(interpretation["ignored"])
                   + "  (add them to --terms in English if they matter)")
+        if interpretation["omitted"]:
+            print("removed as filler: " + ", ".join(interpretation["omitted"])
+                  + "  (add them to --terms if they were real search words)")
         if interpretation["dropped"]:
             print(f"only {MAX_GROUPS} term groups are used; left out: "
                   + ", ".join(g[0] for g in interpretation["dropped"]))
@@ -550,17 +620,19 @@ def main(argv=None):
                 blocks.append(text)
                 collected["stars"] = picks
             except (RuntimeError, OSError) as e:
+                failed = True
                 blocks.append(f"### From your starred repos\nERROR: {e}")
         if "search" in sources:
             repos, trace = search_with_relaxation(gh, groups, extra, max_queries=args.max_queries, allowed=allowed, avoid=avoid)
             text, picks = report_block("New candidates from GitHub search", repos, groups, args, trace)
+            failed = failed or search_failed(trace)
             blocks.append(text)
             collected["search"] = picks
     print("\n\n".join(blocks))
     if args.json_out:
         with open(args.json_out, "w", encoding="utf-8") as f:
             json.dump(collected, f, ensure_ascii=False, indent=1)
-    return 0
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":

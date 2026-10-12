@@ -61,10 +61,10 @@ def frontmatter(path, limit=32768):
         while i < len(lines) and (lines[i].startswith((" ", "\t")) or not lines[i].strip()):
             continued.append(lines[i].strip())
             i += 1
-        continued = [c for c in continued if c]
+        continued = [c for c in continued if c and not c.startswith("#")]  # an indented comment is not part of the value
         if value in BLOCK_SCALARS:
             value = ""
-        out[key] = " ".join([v for v in [value.strip("\"'")] + continued if v])
+        out[key] = " ".join([v for v in [value] + continued if v]).strip("\"'")
     return out
 
 
@@ -224,8 +224,12 @@ def scan_agents(home):
             out.append({"name": p.stem, "source": "plugin:" + plugin_name_from_dir(p.parents[1].name)})
     cache = Path(home) / ".claude" / "plugins" / "cache"
     if cache.is_dir():  # <marketplace>/<plugin>/<version>/agents/<name>.md
-        for p in cache.glob("*/*/*/agents/*.md"):
-            out.append({"name": p.stem, "source": "plugin:" + p.parents[2].name})
+        seen = set()
+        for p in sorted(cache.glob("*/*/*/agents/*.md")):  # several cached versions of a plugin: count each agent once
+            key = (p.parents[2].name, p.stem)
+            if key not in seen:
+                seen.add(key)
+                out.append({"name": p.stem, "source": "plugin:" + p.parents[2].name})
     return out
 
 

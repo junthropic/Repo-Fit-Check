@@ -316,6 +316,58 @@ class SentenceHandling(unittest.TestCase):
         self.assertEqual(D.MIN_REL, 0.34)
 
 
+class PositionBasedMatching(unittest.TestCase):
+    """A glossary word claims the characters it explains, wherever it stands (found by the regression review)."""
+
+    def words(self, text):
+        return [g[0] for g in D.interpret(purpose=text)["groups"]]
+
+    def test_a_short_word_survives_next_to_a_longer_word_that_contains_it(self):
+        self.assertIn("law", self.words("노동법 준수 방법"))      # 법 of 노동법 is not the 법 of 방법
+        self.assertIn("law", self.words("법인 노동법"))
+        self.assertEqual(self.words("데이터베이스 데이터"), ["database", "data"])
+
+    def test_words_that_merely_contain_a_key_do_not_trigger_it(self):
+        for text in ("한국어 맞춤법 검사", "기법 모음", "pdf 수법", "pdf 법칙", "pdf 공법"):
+            self.assertNotIn("law", [w for g in D.interpret(purpose="pdf " + text)["groups"] for w in g], text)
+        self.assertNotIn("hr", self.words("pdf 인사말"))
+        self.assertNotIn("wage", self.words("pdf 임금님"))
+        self.assertEqual(self.words("바코드 스캐너 pdf")[0], "barcode")
+        self.assertEqual(self.words("서버리스 배포")[0], "serverless")
+
+    def test_an_ascii_key_is_not_a_piece_of_a_longer_english_word(self):
+        self.assertEqual(self.words("ERPNext"), ["erpnext"])
+        self.assertEqual(self.words("회계 ERP invoice"), ["accounting", "erp", "invoice"])
+
+    def test_nothing_but_weak_words_is_still_a_search(self):
+        self.assertEqual(self.words("project management"), ["project", "management"])
+        self.assertEqual(self.words("software tool"), ["software", "tool"])
+        with self.assertRaises(ValueError):
+            D.interpret(purpose="who is")
+
+    def test_removed_filler_that_could_have_been_a_term_is_reported(self):
+        r = D.interpret(purpose="I am looking for a tool that can help me translate PDF documents into Korean")
+        self.assertEqual(r["omitted"], ["looking", "help", "tool"])  # grammar words are not worth mentioning
+        self.assertEqual(D.interpret(purpose="help desk software")["omitted"], ["help", "software"])
+        self.assertEqual(D.interpret(purpose="pdf translation")["omitted"], [])
+
+    def test_plural_s_is_added_only_to_words_of_three_letters_or_more(self):
+        self.assertFalse(D.word_in("r", {"rs"}))
+        self.assertFalse(D.word_in("c", {"cs"}))
+        self.assertTrue(D.word_in("pdf", {"pdfs"}))
+        self.assertTrue(D.word_in("tool", {"tools"}))
+
+    def test_rounding_is_half_up(self):
+        self.assertEqual(D.round3(0.8125), 0.813)   # Python's round() gives 0.812: the two languages disagreed
+        self.assertEqual(D.round3(0.8124), 0.812)
+
+    def test_unknown_korean_is_measured_in_characters_not_code_units(self):
+        astral = chr(0x20000)
+        self.assertEqual(D.interpret(purpose="labor law " + astral)["ignored"], [])        # one character
+        self.assertEqual(D.interpret(purpose="labor law " + astral * 2)["ignored"], [astral * 2])
+        self.assertEqual(D.interpret(purpose="labor law " + chr(0xbd) * 2)["ignored"], [])  # fractions are not letters
+
+
 class LicensePenalty(unittest.TestCase):
     def score(self, lic, allowed):
         return D.score_repo(repo("o/x", 10, "labor law", ["labor"], lic=lic), [["labor"], ["law"]], allowed, now=NOW)["score"]
@@ -406,6 +458,39 @@ class FailureHandling(unittest.TestCase):
         self.assertIn("'korea'", out.getvalue())
 
 
+class ExitCodeAndOfflineUse(unittest.TestCase):
+    def test_when_every_source_fails_the_exit_code_says_so(self):
+        import contextlib
+        import io
+        from unittest import mock
+
+        class Down:
+            def starred(self, refresh=False):
+                raise RuntimeError("no network")
+
+            def search(self, *a, **k):
+                raise RuntimeError("no network")
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.object(D, "GH", Down), contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = D.main(["--terms", "korea, law"])
+        self.assertEqual(code, 1)
+        self.assertIn("no network", out.getvalue())
+
+    def test_no_matches_is_not_a_failure(self):
+        import contextlib
+        import io
+        from unittest import mock
+
+        class Empty:
+            def starred(self, refresh=False):
+                return []
+
+            def search(self, *a, **k):
+                return []
+        with mock.patch.object(D, "GH", Empty), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(D.main(["--terms", "korea, law"]), 0)
+
+
 class StarredCache(unittest.TestCase):
     class Recorded(D.GH):
         def __init__(self, cache_dir, login="me"):
@@ -431,6 +516,28 @@ class StarredCache(unittest.TestCase):
             bob = self.Recorded(d, "bob")
             bob.starred()
             self.assertEqual(bob.fetches, 1)
+
+    def test_a_fresh_cache_still_works_when_github_cannot_be_reached_for_the_account_check(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.Recorded(d).starred()
+
+            class Offline(self.Recorded):
+                def _run(self, args, retries=1):
+                    if args == ["api", "user"]:
+                        raise RuntimeError("offline")
+                    return super()._run(args, retries)
+            gh = Offline(d)
+            self.assertEqual([r["full_name"] for r in gh.starred()], ["o/r"])
+            self.assertEqual(gh.fetches, 0)
+
+    def test_odd_entries_in_the_reply_are_skipped(self):
+        class Odd(self.Recorded):
+            def _run(self, args, retries=1):
+                if args == ["api", "user"]:
+                    return {"login": "me"}
+                return [None, [None, "text", {"full_name": "o/ok", "stargazers_count": 3}]]
+        with tempfile.TemporaryDirectory() as d:
+            self.assertEqual([r["full_name"] for r in Odd(d).starred()], ["o/ok"])
 
     def test_a_damaged_or_old_format_cache_is_fetched_again(self):
         with tempfile.TemporaryDirectory() as d:
@@ -478,6 +585,20 @@ class EnvironmentScan(unittest.TestCase):
         p = self.skill("---\nname: 'f'\nmetadata:\n  type: user\ndescription: \"quoted\"\n---\n", "f")
         h = S.frontmatter(p)
         self.assertEqual((h["name"], h["description"]), ("f", "quoted"))
+
+    def test_a_value_wrapped_over_lines_loses_its_closing_quote_and_comments_are_skipped(self):
+        p = self.skill("---\nname: g\ndescription: \"first\n  second\"\n---\n", "g")
+        self.assertEqual(S.frontmatter(p)["description"], "first second")
+        q = self.skill("---\nname: h\ndescription: >\n  alpha\n  # a comment\n  beta\n---\n", "h")
+        self.assertEqual(S.frontmatter(q)["description"], "alpha beta")
+
+    def test_an_agent_in_several_cached_versions_is_counted_once(self):
+        for version in ("1.0", "1.1"):
+            d = self.home / ".claude" / "plugins" / "cache" / "mkt" / "kit" / version / "agents"
+            d.mkdir(parents=True)
+            (d / "reviewer.md").write_text("---\nname: reviewer\n---\n", encoding="utf-8")
+        agents = [a for a in S.scan_agents(self.home) if a["name"] == "reviewer"]
+        self.assertEqual(len(agents), 1)
 
     def test_agents_of_plugins_in_the_cache_are_counted(self):
         d = self.home / ".claude" / "plugins" / "cache" / "mkt" / "toolkit" / "1.0" / "agents"
