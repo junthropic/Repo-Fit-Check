@@ -1,0 +1,424 @@
+{
+ "_comment": "Gap-detection categories. Based on the category list in lukeleekr/claude-github-scout (MIT), extended with this user's domains. `keywords` are matched as whole tokens against item names/descriptions; `search` is a list of term groups ('a|b' = synonyms) used to look for repos when the category is a gap.",
+ "categories": [
+  {
+   "id": "testing",
+   "group": "workflow",
+   "label": "TDD / Testing",
+   "keywords": [
+    "tdd",
+    "pytest",
+    "jest",
+    "coverage",
+    "vitest",
+    "testing",
+    "unit-test",
+    "e2e",
+    "playwright"
+   ],
+   "search": [
+    "claude-code|mcp",
+    "testing|tdd"
+   ]
+  },
+  {
+   "id": "code-review",
+   "group": "workflow",
+   "label": "Code Review",
+   "keywords": [
+    "lint",
+    "eslint",
+    "ruff",
+    "code-review",
+    "codereview",
+    "qodo"
+   ],
+   "search": [
+    "claude-code",
+    "code-review"
+   ]
+  },
+  {
+   "id": "debugging",
+   "group": "workflow",
+   "label": "Debugging",
+   "keywords": [
+    "debug",
+    "debugging",
+    "profiling"
+   ],
+   "search": [
+    "claude-code|mcp",
+    "debugging|debugger"
+   ]
+  },
+  {
+   "id": "security",
+   "group": "workflow",
+   "label": "Security",
+   "keywords": [
+    "security",
+    "owasp",
+    "vulnerability",
+    "dast",
+    "sast"
+   ],
+   "search": [
+    "claude-code|mcp",
+    "security|owasp"
+   ]
+  },
+  {
+   "id": "cicd",
+   "group": "workflow",
+   "label": "CI/CD",
+   "keywords": [
+    "github-actions",
+    "buildkite",
+    "continuous-integration",
+    "circleci"
+   ],
+   "search": [
+    "claude-code|mcp",
+    "ci|github-actions|deploy"
+   ]
+  },
+  {
+   "id": "docs",
+   "group": "workflow",
+   "label": "Documentation",
+   "keywords": [
+    "documentation",
+    "readme",
+    "jsdoc",
+    "sphinx",
+    "docx"
+   ],
+   "search": [
+    "claude-code",
+    "documentation|docs"
+   ]
+  },
+  {
+   "id": "orchestration",
+   "group": "design",
+   "label": "Orchestration",
+   "keywords": [
+    "orchestrate",
+    "orchestration",
+    "subagent"
+   ],
+   "search": [
+    "claude-code",
+    "orchestration|multi-agent"
+   ]
+  },
+  {
+   "id": "planning",
+   "group": "design",
+   "label": "Planning / PRD",
+   "keywords": [
+    "planning",
+    "prd",
+    "roadmap",
+    "specs"
+   ],
+   "search": [
+    "claude-code",
+    "prd|spec|planning"
+   ]
+  },
+  {
+   "id": "design-system",
+   "group": "design",
+   "label": "Design System / UI",
+   "keywords": [
+    "css",
+    "tailwind",
+    "figma",
+    "canva"
+   ],
+   "search": [
+    "claude-code|mcp",
+    "design|figma|ui"
+   ]
+  },
+  {
+   "id": "database",
+   "group": "design",
+   "label": "Database",
+   "keywords": [
+    "database",
+    "schema",
+    "migration",
+    "sql",
+    "orm",
+    "postgres",
+    "supabase"
+   ],
+   "search": [
+    "mcp|claude-code",
+    "database|sql|postgres"
+   ]
+  },
+  {
+   "id": "prompt",
+   "group": "ai-tooling",
+   "label": "Prompt Engineering",
+   "keywords": [
+    "prompt",
+    "prompts",
+    "system-prompt",
+    "prompt-audit"
+   ],
+   "search": [
+    "claude-code",
+    "prompt|prompts"
+   ]
+  },
+  {
+   "id": "context",
+   "group": "ai-tooling",
+   "label": "Context / Memory",
+   "keywords": [
+    "memory",
+    "rag",
+    "embedding"
+   ],
+   "search": [
+    "claude-code|mcp",
+    "memory|context|rag"
+   ]
+  },
+  {
+   "id": "cost",
+   "group": "ai-tooling",
+   "label": "Cost / Token Optimization",
+   "keywords": [
+    "cost",
+    "costs",
+    "token usage",
+    "token optimizer",
+    "token efficient",
+    "ccusage",
+    "billing",
+    "spend"
+   ],
+   "search": [
+    "claude|claude-code",
+    "token|cost|usage"
+   ]
+  },
+  {
+   "id": "mcp-filesystem",
+   "group": "mcp",
+   "label": "MCP - File/System",
+   "keywords": [
+    "filesystem",
+    "shell",
+    "docker",
+    "terminal",
+    "desktop-commander"
+   ],
+   "search": [
+    "mcp-server",
+    "filesystem|shell|docker"
+   ]
+  },
+  {
+   "id": "mcp-web",
+   "group": "mcp",
+   "label": "MCP - Web/API",
+   "keywords": [
+    "graphql",
+    "scrape",
+    "browser",
+    "crawl",
+    "scraper"
+   ],
+   "search": [
+    "mcp-server",
+    "fetch|browser|scrape"
+   ]
+  },
+  {
+   "id": "mcp-cloud",
+   "group": "mcp",
+   "label": "MCP - Cloud",
+   "keywords": [
+    "aws",
+    "gcp",
+    "azure",
+    "vercel",
+    "netlify",
+    "cloudflare"
+   ],
+   "search": [
+    "mcp-server",
+    "aws|vercel|cloudflare"
+   ]
+  },
+  {
+   "id": "mcp-productivity",
+   "group": "mcp",
+   "label": "MCP - Productivity",
+   "keywords": [
+    "slack",
+    "notion",
+    "linear",
+    "jira",
+    "gmail",
+    "calendar"
+   ],
+   "search": [
+    "mcp-server",
+    "slack|notion|linear"
+   ]
+  },
+  {
+   "id": "mcp-search",
+   "group": "mcp",
+   "label": "MCP - Search/Knowledge",
+   "keywords": [
+    "context7",
+    "exa",
+    "tavily",
+    "research"
+   ],
+   "search": [
+    "mcp-server",
+    "search|docs"
+   ]
+  },
+  {
+   "id": "git",
+   "group": "dev",
+   "label": "Git Workflow",
+   "keywords": [
+    "git",
+    "worktree",
+    "gitkraken"
+   ],
+   "search": [
+    "claude-code",
+    "git|worktree"
+   ]
+  },
+  {
+   "id": "performance",
+   "group": "dev",
+   "label": "Performance",
+   "keywords": [
+    "performance",
+    "benchmark",
+    "optimization"
+   ],
+   "search": [
+    "claude-code",
+    "performance|benchmark"
+   ]
+  },
+  {
+   "id": "monitoring",
+   "group": "dev",
+   "label": "Monitoring / Observability",
+   "keywords": [
+    "monitor",
+    "monitoring",
+    "metrics",
+    "logging",
+    "observability",
+    "datadog",
+    "signoz",
+    "honeycomb",
+    "grafana"
+   ],
+   "search": [
+    "mcp-server|claude-code",
+    "observability|monitoring"
+   ]
+  },
+  {
+   "id": "automation",
+   "group": "dev",
+   "label": "Automation",
+   "keywords": [
+    "automation",
+    "hook",
+    "hooks",
+    "cron",
+    "zapier"
+   ],
+   "search": [
+    "claude-code",
+    "automation|hooks"
+   ]
+  },
+  {
+   "id": "legal-compliance",
+   "group": "user-domain",
+   "label": "Legal / Compliance",
+   "keywords": [
+    "legal",
+    "compliance",
+    "contract",
+    "statute",
+    "contract-review",
+    "gdpr"
+   ],
+   "search": [
+    "korean|korea",
+    "law|legal|labor"
+   ]
+  },
+  {
+   "id": "hr",
+   "group": "user-domain",
+   "label": "HR / Recruiting / Payroll",
+   "keywords": [
+    "hr",
+    "recruiting",
+    "recruitment",
+    "payroll",
+    "hiring"
+   ],
+   "search": [
+    "hr|recruiting",
+    "payroll|hiring"
+   ]
+  },
+  {
+   "id": "finance",
+   "group": "user-domain",
+   "label": "Accounting / ERP / Finance",
+   "keywords": [
+    "accounting",
+    "erp",
+    "finance",
+    "invoice",
+    "ledger",
+    "bookkeeping"
+   ],
+   "search": [
+    "accounting|erp",
+    "invoice|ledger"
+   ]
+  },
+  {
+   "id": "pdf-doc",
+   "group": "user-domain",
+   "label": "PDF / Document processing",
+   "keywords": [
+    "pdf",
+    "docx",
+    "pptx",
+    "xlsx",
+    "ocr"
+   ],
+   "search": [
+    "pdf|ocr",
+    "parse|extract"
+   ]
+  }
+ ]
+}
