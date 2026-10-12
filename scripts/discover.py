@@ -29,11 +29,32 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 REFS = HERE.parent / "references"
-STOPWORDS = {"a", "an", "the", "and", "or", "for", "of", "to", "in", "on", "with", "my", "our", "tool", "tools",
-             "that", "this", "using", "use", "app", "project"}
+# Filler words of English sentences. Kept identical to site/search.js of the star-search project.
+STOPWORDS = {
+    "a", "an", "the", "and", "or", "for", "of", "to", "in", "on", "with", "my", "our", "tool", "tools",
+    "that", "this", "using", "use", "app", "project",
+    "i", "am", "is", "are", "was", "were", "be", "been", "being", "can", "could", "would", "should", "will",
+    "shall", "may", "might", "must", "do", "does", "did", "you", "your", "yours", "me", "we", "us", "it", "its",
+    "they", "them", "their", "he", "she", "his", "her", "find", "finding", "looking", "look", "help", "helps",
+    "want", "wants", "need", "needs", "good", "best", "better", "some", "any", "something", "anything",
+    "please", "like", "how", "what", "which", "who", "whom", "where", "when", "why", "get", "gets", "make",
+    "makes", "have", "has", "had", "into", "from", "by", "at", "as", "about", "than", "then", "so", "if", "not",
+    "no", "but", "all", "more", "most", "very", "also", "just", "there", "here", "used", "one", "own", "up",
+    "out", "over", "too", "such", "these", "those", "other", "another",
+}
 GENERIC = {"platform", "system", "service", "program", "software", "solution", "application", "management"}
+SINGLE_LETTER_OK = {"c", "r"}  # language names; any other one-letter word is noise
 FIELD_WEIGHT = {"name": 1.0, "topics": 0.9, "description": 0.7}
 QUALIFIERS = "in:name,description,readme archived:false fork:false"
+MIN_REL = 0.34
+MAX_GROUPS = 6
+# One definition of "blank", used by both implementations. str.strip() and JS trim() disagree on
+# U+001C-001F, U+0085 and U+FEFF, which made the two rank differently.
+SPACE = re.compile(r"[\u0000-\u0020\u007f-\u00a0\u1680\u180e\u2000-\u200b\u2028\u2029\u202f\u205f\u3000\ufeff]+")
+# English word as a visitor writes it: 3D, C#, C++, node.js, open-source; no trailing punctuation.
+TERM = re.compile(r"[A-Za-z0-9][A-Za-z0-9+#]*(?:[-.][A-Za-z0-9+#]+)*")
+# GitHub's timestamp format. Anything else is treated as "no push date", never as an error.
+ISO_Z = re.compile(r"([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2}):([0-9]{2})Z")
 
 
 # ---------------------------------------------------------------- terms
@@ -49,37 +70,72 @@ def has_non_ascii(text):
     return any(ord(c) > 127 for c in text)
 
 
-def parse_terms(terms_arg=None, purpose=None, glossary=None):
-    """Return term groups: [['labor','employment'], ['law','statute'], ['compliance']].
+def normalize_space(text):
+    return SPACE.sub(" ", str(text or "")).strip(" ")
+
+
+def dedupe_groups(groups):
+    """Drop repeated words inside a group and groups with the same word set (they would count twice)."""
+    seen, out = set(), []
+    for g in groups:
+        g = list(dict.fromkeys(g))
+        key = frozenset(g)
+        if key not in seen:
+            seen.add(key)
+            out.append(g)
+    return out
+
+
+def interpret(terms_arg=None, purpose=None, glossary=None):
+    """Turn the user's words into term groups and say what was left out.
+
+    Returns {"groups": [['labor','employment'], ['law','statute'], ['compliance']],
+             "dropped": groups cut because only MAX_GROUPS are used,
+             "ignored": Korean words that neither the glossary nor the English rules understood}.
     Within a group words are synonyms (any one matches); groups are all required for full relevance.
-    Raises ValueError when only untranslatable non-ASCII text is available (fail loudly, not empty)."""
+    Raises ValueError when there is nothing usable (fail loudly, not empty)."""
     glossary = load_glossary() if glossary is None else glossary
-    groups = []
+    terms_arg, purpose = normalize_space(terms_arg), normalize_space(purpose)
+    groups, ignored = [], []
     if terms_arg:
         for part in terms_arg.split(","):
-            words = [w.strip().lower() for w in part.split("|") if w.strip()]
+            words = [w.strip(" ").lower() for w in part.split("|") if w.strip(" ")]
             if words:
                 groups.append(words)
     elif purpose:
-        used, found = set(), []
+        used, found = [], []
         for ko, en in sorted(glossary.items(), key=lambda kv: -len(kv[0])):
             if ko in purpose and not any(ko in u or u in ko for u in used):
-                used.add(ko)
+                used.append(ko)
                 if en:  # an empty value means "ignore this word" (방법 must not trigger 법)
                     found.append((purpose.index(ko), [w.lower() for w in en.split("|")]))
-        for m in re.finditer(r"[A-Za-z][A-Za-z0-9\-\.]+", purpose):
+        for m in TERM.finditer(purpose):
             w = m.group(0).lower()
-            if w not in STOPWORDS and not any(w in g for _, g in found):
+            if w in STOPWORDS or w.isdigit() or (len(w) < 2 and w not in SINGLE_LETTER_OK):
+                continue
+            if not any(w in g for _, g in found):
                 found.append((m.start(), [w]))
         # purpose order = user's emphasis; generic words ('platform') only dilute relevance
         groups = [g for _, g in sorted(found, key=lambda x: x[0]) if not set(g) <= GENERIC]
+        rest = purpose
+        for ko in used:
+            rest = rest.replace(ko, " ")
+        for w in re.findall(r"[^\W\d_]+", TERM.sub(" ", rest)):
+            if len(w) >= 2 and w not in ignored:
+                ignored.append(w)
+    groups = dedupe_groups(groups)
     bad = [w for g in groups for w in g if has_non_ascii(w)]
     if bad:
         raise ValueError(f"non-English terms need translation: {bad}. Pass English --terms 'a|b, c'.")
     if not groups:
-        raise ValueError("no usable search terms. Pass --terms 'labor|employment, law, compliance' "
+        hint = f" Not understood: {', '.join(ignored)}." if ignored else ""
+        raise ValueError("no usable search terms." + hint + " Pass --terms 'labor|employment, law, compliance' "
                          "(English; use | for synonyms) or an --purpose the glossary understands.")
-    return groups[:6]
+    return {"groups": groups[:MAX_GROUPS], "dropped": groups[MAX_GROUPS:], "ignored": ignored}
+
+
+def parse_terms(terms_arg=None, purpose=None, glossary=None):
+    return interpret(terms_arg, purpose, glossary)["groups"]
 
 
 # ---------------------------------------------------------------- gh backend
@@ -181,7 +237,8 @@ def word_in(word, toks):
     if not parts:
         return False
     def has(p):
-        return p in toks or p + "s" in toks or (p.endswith("s") and p[:-1] in toks)
+        # singular <- plural only for longer words: 'as'->'a', 'its'->'it', 'news'->'new' are not plurals
+        return p in toks or p + "s" in toks or (len(p) >= 5 and p.endswith("s") and p[:-1] in toks)
     return all(has(p) for p in parts)
 
 
@@ -200,34 +257,60 @@ def group_scores(repo, groups):
     return scores, wheres
 
 
-def idf_weights(repos, groups):
-    """Rarer term groups in the pool discriminate more ('korea' > 'compliance')."""
-    n = len(repos)
-    if n < 10:
-        return [1.0] * len(groups)
+def document_frequencies(repos, groups):
     df = [0] * len(groups)
     for r in repos:
         for i, s in enumerate(group_scores(r, groups)[0]):
             df[i] += 1 if s > 0 else 0
-    return [math.log(1 + n / (d + 1)) for d in df]
+    return df
+
+
+def idf_weights(repos, groups):
+    """Rarer term groups in the pool discriminate more ('korea' > 'compliance').
+    A group no repository matches gets weight 0: a word that is simply absent (a filler like
+    'please') must not become the most important one and push every repository below the cut."""
+    n = len(repos)
+    if n < 10:
+        return [1.0] * len(groups)
+    return [math.log(1 + n / (d + 1)) if d > 0 else 0.0 for d in document_frequencies(repos, groups)]
+
+
+def unmatched_groups(repos, groups):
+    """Groups that no repository in the (live) pool matches; they were left out of the scoring."""
+    live = [r for r in repos if not (r["archived"] or r["fork"])]
+    if len(live) < 10:
+        return []
+    return [g for g, d in zip(groups, document_frequencies(live, groups)) if d == 0]
 
 
 def relevance(repo, groups, weights=None):
     """Weighted mean of group scores; plus 'why' for display."""
     scores, wheres = group_scores(repo, groups)
     weights = weights or [1.0] * len(groups)
-    rel = sum(w * s for w, s in zip(weights, scores)) / sum(weights)
-    if all(s > 0 for s in scores):
+    den = sum(weights)
+    rel = sum(w * s for w, s in zip(weights, scores)) / den if den > 0 else 0.0
+    active = [s for s, w in zip(scores, weights) if w > 0]
+    if active and all(s > 0 for s in active):
         rel = min(1.0, rel + 0.1)
     why = [f"{g[0]}<-{where}" for g, where in zip(groups, wheres) if where]
     return rel, why
 
 
 def days_since(iso, now=None):
-    if not iso:
+    """Days since the push. A date that is not GitHub's YYYY-MM-DDTHH:MM:SSZ counts as 'no date'."""
+    m = ISO_Z.fullmatch(iso) if iso else None
+    if not m:
+        return 9999
+    y, mo, d, h, mi, s = (int(x) for x in m.groups())
+    # ranges are checked here, not by fromisoformat, whose strictness differs between Python versions
+    if y < 1970 or h > 23 or mi > 59 or s > 59:
+        return 9999
+    try:
+        pushed = datetime(y, mo, d, h, mi, s, tzinfo=timezone.utc)
+    except ValueError:
         return 9999
     now = now or datetime.now(timezone.utc)
-    return max(0, (now - datetime.fromisoformat(iso.replace("Z", "+00:00"))).days)
+    return max(0, (now - pushed).days)
 
 
 def activity(days):
@@ -326,6 +409,9 @@ def report_block(title, repos, groups, args, trace=None):
     scored, excluded = rank(repos, groups, allowed, avoid, min_rel=args.min_rel)
     main, small = select(scored, args.top)
     out = [f"### {title}", f"pool {len(repos)} -> kept {len(scored)} (excluded {len(excluded)})"]
+    left_out = unmatched_groups(repos, groups)
+    if left_out:
+        out.append("No repository matches " + ", ".join(g[0] for g in left_out) + "; left out of the scoring.")
     if not main:
         out.append("No relevant candidate. Loosen --terms or add synonyms; the query trace below shows what was tried.")
     else:
@@ -355,7 +441,7 @@ def main(argv=None):
     ap.add_argument("--language", default="")
     ap.add_argument("--active-days", type=int, default=0, help="only search repos pushed within N days")
     ap.add_argument("--top", type=int, default=10)
-    ap.add_argument("--min-rel", type=float, default=0.34)
+    ap.add_argument("--min-rel", type=float, default=MIN_REL)
     ap.add_argument("--max-queries", type=int, default=16)
     ap.add_argument("--refresh-stars", action="store_true")
     ap.add_argument("--json-out")
@@ -387,11 +473,18 @@ def main(argv=None):
             collected[cat["id"]] = picks
     else:
         try:
-            groups = parse_terms(args.terms, args.purpose)
+            interpretation = interpret(args.terms, args.purpose)
         except ValueError as e:
             print(f"ERROR: {e}", file=sys.stderr)
             return 2
+        groups = interpretation["groups"]
         print(f"terms: {groups}" + (f"  stage: {args.stage}" if args.stage else ""))
+        if interpretation["ignored"]:
+            print("not understood, left out: " + ", ".join(interpretation["ignored"])
+                  + "  (add them to --terms in English if they matter)")
+        if interpretation["dropped"]:
+            print(f"only {MAX_GROUPS} term groups are used; left out: "
+                  + ", ".join(g[0] for g in interpretation["dropped"]))
         sources = [s.strip() for s in args.source.split(",")]
         if "stars" in sources:
             try:

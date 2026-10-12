@@ -237,5 +237,84 @@ class Problem4_EmptyKeywordMode(unittest.TestCase):
         self.assertTrue(all("error" in t for t in trace))
 
 
+class SentenceHandling(unittest.TestCase):
+    """Realistic sentences: filler is dropped, nothing silently disappears, odd input is treated the same everywhere."""
+
+    def words(self, text):
+        return [g[0] for g in D.interpret(purpose=text)["groups"]]
+
+    def test_english_filler_does_not_use_up_the_term_slots(self):
+        self.assertEqual(self.words("I am looking for a tool that can help me translate PDF documents into Korean"),
+                         ["translate", "pdf", "documents", "korean"])
+        self.assertEqual(self.words("Can you find me a good MCP server for searching the web?"),
+                         ["mcp", "server", "searching", "web"])
+
+    def test_cut_groups_are_reported(self):
+        r = D.interpret(purpose="alpha beta gamma delta epsilon zeta eta theta")
+        self.assertEqual(len(r["groups"]), D.MAX_GROUPS)
+        self.assertEqual([g[0] for g in r["dropped"]], ["eta", "theta"])
+
+    def test_unknown_korean_is_reported_not_swallowed(self):
+        r = D.interpret(purpose="pdf 렌더링")
+        self.assertEqual(r["ignored"], ["렌더링"])
+        self.assertEqual(self.words("PDF 번역 도구"), ["pdf", "translate"])  # 번역 is known now, 도구 is filler
+        self.assertEqual(D.interpret(purpose="PDF 번역 도구")["ignored"], [])
+
+    def test_nothing_understood_names_the_words(self):
+        with self.assertRaisesRegex(ValueError, "Not understood"):
+            D.interpret(purpose="노무현 연설문")
+
+    def test_terms_keep_digits_symbols_and_drop_trailing_punctuation(self):
+        self.assertEqual(self.words("3D printing"), ["3d", "printing"])
+        self.assertEqual(self.words("C# parser"), ["c#", "parser"])
+        self.assertEqual(self.words("R language"), ["r", "language"])
+        self.assertEqual(self.words("node.js library"), ["node.js", "library"])
+        self.assertEqual(self.words("law. labor."), ["law", "labor"])
+        self.assertEqual(self.words("year 2024 report"), ["year", "report"])  # a bare number is noise
+
+    def test_repeated_groups_count_once(self):
+        self.assertEqual(D.parse_terms(terms_arg="law|law, law"), [["law"]])
+        self.assertEqual(D.parse_terms(terms_arg="law|statute, statute|law"), [["law", "statute"]])
+
+    def test_blank_characters_are_the_same_in_both_implementations(self):
+        for blank in (chr(0x1c), chr(0x85), chr(0xfeff), chr(0xa0), chr(0x3000)):
+            self.assertEqual(D.parse_terms(terms_arg="law," + blank), [["law"]], hex(ord(blank)))
+
+    def test_short_words_do_not_match_by_stripping_an_s(self):
+        toks = D.tokens("a diagram as code. it is news for ios in js. new tools")
+        self.assertFalse(D.word_in("as", {"a"}))
+        self.assertFalse(D.word_in("its", {"it"}))
+        self.assertFalse(D.word_in("news", {"new"}))
+        self.assertFalse(D.word_in("ios", {"io"}))
+        self.assertTrue(D.word_in("tools", {"tool"}))   # a real plural still matches
+        self.assertTrue(D.word_in("pdf", {"pdfs"}))     # and the other direction too
+        self.assertTrue(D.word_in("as", toks))          # the word itself still matches
+
+    def test_a_word_no_repository_has_is_left_out_not_made_decisive(self):
+        pool = [repo(f"o/pdf-{i}", 10 + i, "pdf translation", ["pdf"]) for i in range(12)]
+        base, _ = D.rank(pool, [["pdf"], ["translation"]], min_rel=0.34, now=NOW)
+        with_absent, _ = D.rank(pool, [["pdf"], ["translation"], ["xyzzy"]], min_rel=0.34, now=NOW)
+        self.assertEqual(len(with_absent), len(base))
+        self.assertEqual([r["rel"] for r in with_absent], [r["rel"] for r in base])  # same scores, absent word ignored
+        self.assertEqual(D.unmatched_groups(pool, [["pdf"], ["xyzzy"]]), [["xyzzy"]])
+        self.assertEqual(D.idf_weights(pool, [["pdf"], ["xyzzy"]])[1], 0.0)
+
+    def test_small_pools_keep_equal_weights(self):
+        pool = [repo("o/pdf", 1, "pdf", ["pdf"])]
+        self.assertEqual(D.idf_weights(pool, [["pdf"], ["xyzzy"]]), [1.0, 1.0])
+        self.assertEqual(D.unmatched_groups(pool, [["xyzzy"]]), [])
+
+    def test_only_github_timestamps_count_as_dates(self):
+        ok = "2026-10-01T00:00:00Z"
+        self.assertEqual(D.days_since(ok, NOW), 11)
+        for bad in ("2026-10-01", "2026-10-01T00:00:00", "bad", "2026-13-45T00:00:00Z", "2026-02-30T00:00:00Z",
+                    "2026-01-01T24:00:00Z", "2026-10-01T00:00:60Z", "0001-01-01T00:00:00Z", ok + "\n", "", None):
+            self.assertEqual(D.days_since(bad, NOW), 9999, repr(bad))
+        self.assertEqual(D.days_since("2099-01-01T00:00:00Z", NOW), 0)  # the future is "today", not an error
+
+    def test_min_rel_default_is_the_shared_constant(self):
+        self.assertEqual(D.MIN_REL, 0.34)
+
+
 if __name__ == "__main__":
     unittest.main()
